@@ -20,9 +20,9 @@ class ApiService extends GetConnect {
   static String get defaultBaseUrl {
     if (_envBaseUrl.isNotEmpty) return _envBaseUrl;
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://192.168.18.177:5000';
+      return 'https://beken-tokojanah-five.vercel.app';
     }
-    return 'http://127.0.0.1:5000';
+    return 'https://beken-tokojanah-five.vercel.app';
   }
 
   final RxnString token = RxnString();
@@ -161,6 +161,119 @@ class ApiService extends GetConnect {
     return ApiResult(
       success: false,
       message: _extractError(response, 'Gagal memuat profil'),
+    );
+  }
+
+  Future<ApiResult<void>> changePassword({
+    required String oldPassword,
+    required String newPassword,
+  }) async {
+    final response = await post('/api/change-password', {
+      'old_password': oldPassword,
+      'new_password': newPassword,
+    });
+    final map = _asMap(response.body);
+    if (response.isOk && map?['success'] == true) {
+      return ApiResult(
+        success: true,
+        message: (map?['message'] as String?) ?? 'Kata sandi berhasil diubah!',
+      );
+    }
+    return ApiResult(
+      success: false,
+      message: _extractError(response, 'Gagal mengubah kata sandi'),
+    );
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> getStoreInfo() async {
+    final response = await get('/api/store-info');
+    final map = _asMap(response.body);
+    if (response.isOk && map?['success'] == true) {
+      final data = _asMap(map?['data']) ?? {'description': ''};
+      return ApiResult(
+        success: true,
+        message: 'Informasi toko berhasil dimuat',
+        data: data,
+      );
+    }
+    return ApiResult(
+      success: false,
+      message: _extractError(response, 'Gagal memuat informasi toko'),
+    );
+  }
+
+  Future<ApiResult<void>> saveStoreInfo({
+    required String description,
+  }) async {
+    final response = await post('/api/store-info', {
+      'description': description,
+    });
+    final map = _asMap(response.body);
+    if (response.isOk && map?['success'] == true) {
+      return ApiResult(
+        success: true,
+        message: (map?['message'] as String?) ?? 'Informasi toko berhasil disimpan!',
+      );
+    }
+    return ApiResult(
+      success: false,
+      message: _extractError(response, 'Gagal menyimpan informasi toko'),
+    );
+  }
+
+  // ==========================================================
+  // 1.5 KATEGORI PRODUK (CRUD)
+  // ==========================================================
+
+  Future<ApiResult<List<Map<String, dynamic>>>> getCategories() async {
+    final response = await get('/api/categories');
+    final map = _asMap(response.body);
+    if (response.isOk && map?['success'] == true) {
+      final rawList = map?['data'] as List? ?? [];
+      final categories = rawList
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      return ApiResult(
+        success: true,
+        message: 'Kategori berhasil dimuat',
+        data: categories,
+      );
+    }
+    return ApiResult(
+      success: false,
+      message: _extractError(response, 'Gagal memuat kategori'),
+    );
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> addCategory(String name) async {
+    final response = await post('/api/categories', {'name': name});
+    final map = _asMap(response.body);
+    if (response.isOk && map?['success'] == true) {
+      return ApiResult(
+        success: true,
+        message: (map?['message'] as String?) ?? 'Kategori berhasil ditambahkan!',
+        data: _asMap(map?['data']),
+      );
+    }
+    return ApiResult(
+      success: false,
+      message: _extractError(response, 'Gagal menambahkan kategori'),
+    );
+  }
+
+  Future<ApiResult<void>> deleteCategory(int id) async {
+    final response = await delete('/api/categories/$id');
+    final map = _asMap(response.body);
+    if (response.isOk && map?['success'] == true) {
+      return ApiResult(
+        success: true,
+        message: (map?['message'] as String?) ?? 'Kategori berhasil dihapus!',
+      );
+    }
+    return ApiResult(
+      success: false,
+      message: _extractError(response, 'Gagal menghapus kategori'),
     );
   }
 
@@ -333,8 +446,9 @@ class ApiService extends GetConnect {
     );
   }
 
-  Future<ApiResult<List<Map<String, dynamic>>>> getTransactions() async {
-    final response = await get('/api/transactions');
+  Future<ApiResult<List<Map<String, dynamic>>>> getTransactions({int? userId}) async {
+    final path = userId != null ? '/api/transactions?user_id=$userId' : '/api/transactions';
+    final response = await get(path);
     final map = _asMap(response.body);
     if (response.isOk && map?['success'] == true) {
       final rawList = map?['data'] as List? ?? [];

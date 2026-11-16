@@ -24,6 +24,12 @@ class HomeView extends GetView<HomeController> {
     Get.toNamed(Routes.INFO_STOCK);
   }
 
+  void _executeSearch(BuildContext context, HomeController homeController) {
+    final query = homeController.searchController.text.trim();
+    homeController.onSearchSubmitted(query);
+    _showInfoStockSheet(context);
+  }
+
   void _showHitungBarangSheet(BuildContext context) {
     controller.fetchProducts();
     Get.toNamed(Routes.HITUNG_BARANG);
@@ -71,9 +77,10 @@ class HomeView extends GetView<HomeController> {
                     Expanded(
                       child: TextField(
                         controller: homeController.searchController,
-                        onSubmitted: homeController.onSearchSubmitted,
+                        textInputAction: TextInputAction.search,
+                        onSubmitted: (_) => _executeSearch(context, homeController),
                         decoration: const InputDecoration(
-                          hintText: 'Search for creators or inspiration...',
+                          hintText: 'Cari produk di Info Produk...',
                           hintStyle: TextStyle(
                             color: Color(0xFF8C7E74),
                             fontSize: 13.5,
@@ -85,19 +92,17 @@ class HomeView extends GetView<HomeController> {
                     ),
                     const SizedBox(width: 8),
                     GestureDetector(
-                      onTap: () => homeController.onSearchSubmitted(
-                        homeController.searchController.text,
-                      ),
+                      onTap: () => _executeSearch(context, homeController),
                       child: Container(
                         width: 42,
                         height: 42,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFE7E2DF),
+                          color: const Color(0xFFD49A5B),
                           borderRadius: BorderRadius.circular(21),
                         ),
                         child: const Icon(
                           Icons.search,
-                          color: Color(0xFF6E6259),
+                          color: Colors.white,
                           size: 20,
                         ),
                       ),
@@ -112,7 +117,7 @@ class HomeView extends GetView<HomeController> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   const Text(
-                    'Recent Searches',
+                    'Pencarian Terakhir',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w700,
@@ -122,7 +127,7 @@ class HomeView extends GetView<HomeController> {
                   GestureDetector(
                     onTap: homeController.clearRecentSearches,
                     child: const Text(
-                      'Clear',
+                      'Hapus Semua',
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w500,
@@ -141,8 +146,7 @@ class HomeView extends GetView<HomeController> {
                     return GestureDetector(
                       onTap: () {
                         homeController.searchController.text = item;
-                        homeController.onSearchSubmitted(item);
-                        _showInfoStockSheet(context);
+                        _executeSearch(context, homeController);
                       },
                       child: Container(
                         padding: const EdgeInsets.symmetric(

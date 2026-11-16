@@ -3,6 +3,26 @@ import 'package:get/get.dart';
 import '../../../data/services/api_service.dart';
 import '../../main_navigation/controllers/main_navigation_controller.dart';
 
+const List<String> defaultProductCategories = [
+  "Sembako & Bahan Pokok",
+  "Bumbu Dapur & Penyedap",
+  "Rokok & Korek Api",
+  "Minuman",
+  "Makanan Ringan & Roti Kemasan",
+  "Perawatan Diri",
+  "Kebersihan Rumah Tangga",
+  "Kebutuhan Bayi & Anak",
+  "Obat-obatan Bebas & P3K",
+  "Kosmetik & Skincare Dasar",
+  "ATK, Listrik & Kebutuhan Harian",
+  "Produk Segar",
+  "Daging, Ayam & Hasil Laut",
+  "Makanan Dingin & Beku",
+  "Roti Segar & Kue",
+  "Peralatan Rumah Tangga & Non-Pangan",
+  "Lainnya",
+];
+
 class HomeController extends GetxController {
   final ApiService _apiService = Get.find<ApiService>();
 
@@ -13,13 +33,136 @@ class HomeController extends GetxController {
   final errorMessage = RxnString();
   final isSubmitting = false.obs;
 
+  // Kategori Produk
+  final categories = <String>[...defaultProductCategories].obs;
+  final categoryList = <Map<String, dynamic>>[].obs;
+  final selectedCategory = 'Semua'.obs;
+  final isLoadingCategories = false.obs;
+
   // Cart untuk Hitung Barang: productId -> quantity
   final cart = <int, int>{}.obs;
 
   @override
   void onInit() {
     super.onInit();
+    fetchCategories();
     fetchProducts();
+  }
+
+  Future<void> fetchCategories() async {
+    isLoadingCategories.value = true;
+    try {
+      final result = await _apiService.getCategories();
+      if (result.success && result.data != null && result.data!.isNotEmpty) {
+        categoryList.assignAll(result.data!);
+        final names = result.data!.map((e) => e['name'].toString()).toList();
+        for (final defCat in defaultProductCategories) {
+          if (!names.contains(defCat)) {
+            names.add(defCat);
+          }
+        }
+        categories.assignAll(names);
+      }
+    } catch (_) {
+    } finally {
+      isLoadingCategories.value = false;
+    }
+  }
+
+  Future<bool> addCategory(String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) {
+      Get.snackbar('Peringatan', 'Nama kategori tidak boleh kosong.');
+      return false;
+    }
+    isSubmitting.value = true;
+    try {
+      final result = await _apiService.addCategory(trimmed);
+      if (result.success) {
+        if (!categories.contains(trimmed)) {
+          categories.add(trimmed);
+        }
+        await fetchCategories();
+        Get.snackbar(
+          'Berhasil',
+          'Kategori "$trimmed" berhasil ditambahkan.',
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: Colors.green.withOpacity(0.9),
+          colorText: Colors.white,
+        );
+        return true;
+      } else {
+        Get.snackbar(
+          'Gagal',
+          result.message,
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: Colors.redAccent.withOpacity(0.9),
+          colorText: Colors.white,
+        );
+        return false;
+      }
+    } finally {
+      isSubmitting.value = false;
+    }
+  }
+
+  Future<bool> deleteCategory(int id, String name) async {
+    isSubmitting.value = true;
+    try {
+      final result = await _apiService.deleteCategory(id);
+      if (result.success) {
+        categories.remove(name);
+        categoryList.removeWhere((e) => e['id'] == id);
+        if (selectedCategory.value == name) {
+          selectedCategory.value = 'Semua';
+        }
+        await fetchProducts();
+        Get.snackbar(
+          'Dihapus',
+          'Kategori "$name" berhasil dihapus.',
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: Colors.green.withOpacity(0.9),
+          colorText: Colors.white,
+        );
+        return true;
+      } else {
+        Get.snackbar(
+          'Gagal',
+          result.message,
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: Colors.redAccent.withOpacity(0.9),
+          colorText: Colors.white,
+        );
+        return false;
+      }
+    } finally {
+      isSubmitting.value = false;
+    }
+  }
+
+  // Daftar produk yang difilter kategori
+  List<Map<String, dynamic>> get filteredProducts {
+    if (selectedCategory.value == 'Semua') {
+      return products;
+    }
+    return products
+        .where((p) => (p['category'] ?? 'Lainnya') == selectedCategory.value)
+        .toList();
+  }
+
+  // Pengelompokan produk berdasarkan kategori
+  Map<String, List<Map<String, dynamic>>> get productsGroupedByCategory {
+    final Map<String, List<Map<String, dynamic>>> map = {};
+    for (final p in filteredProducts) {
+      final cat = (p['category']?.toString().trim().isNotEmpty == true)
+          ? p['category'].toString().trim()
+          : 'Lainnya';
+      if (!map.containsKey(cat)) {
+        map[cat] = [];
+      }
+      map[cat]!.add(p);
+    }
+    return map;
   }
 
   Future<void> fetchProducts({String search = ''}) async {
