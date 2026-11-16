@@ -13,12 +13,6 @@ class MainNavigationView extends GetView<MainNavigationController> {
   Widget build(BuildContext context) {
     final controller = Get.put(MainNavigationController());
 
-    final List<Widget> pages = [
-      const HistoryView(),
-      const BarcodeView(),
-      const ProfileView(),
-    ];
-
     return Obx(
       () => PopScope(
         canPop: controller.isHomeActive.value,
@@ -32,7 +26,13 @@ class MainNavigationView extends GetView<MainNavigationController> {
               ? const HomeView()
               : IndexedStack(
                   index: controller.currentIndex.value,
-                  children: pages,
+                  children: [
+                    const HistoryView(),
+                    controller.currentIndex.value == 1 && !controller.isHomeActive.value
+                        ? const BarcodeView()
+                        : const SizedBox.shrink(),
+                    const ProfileView(),
+                  ],
                 ),
           bottomNavigationBar: Container(
             decoration: BoxDecoration(

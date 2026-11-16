@@ -7,7 +7,8 @@ import '../../home/controllers/home_controller.dart';
 import '../controllers/main_navigation_controller.dart';
 
 class BarcodeView extends StatefulWidget {
-  const BarcodeView({super.key});
+  final bool isCashierMode;
+  const BarcodeView({super.key, this.isCashierMode = false});
 
   @override
   State<BarcodeView> createState() => _BarcodeViewState();
@@ -18,8 +19,17 @@ class _BarcodeViewState extends State<BarcodeView> {
   final MainNavigationController _navController =
       Get.find<MainNavigationController>();
 
+  bool get _isCashier =>
+      widget.isCashierMode || _navController.isCashierScan.value;
+
+  bool get _isActiveTab =>
+      widget.isCashierMode ||
+      (!_navController.isHomeActive.value &&
+          _navController.currentIndex.value == 1);
+
   MobileScannerController? _scannerController;
   Worker? _scanTriggerWorker;
+  Worker? _activeTabWorker;
   bool _isScanning = false;
   bool _isHandlingResult = false;
   String? _lastScannedCode;
@@ -28,11 +38,24 @@ class _BarcodeViewState extends State<BarcodeView> {
   void initState() {
     super.initState();
     _scanTriggerWorker = ever(_navController.autoScanTrigger, (_) {
-      if (mounted && !_isScanning) {
+      if (mounted && _isActiveTab && !_isScanning) {
         _startScanner();
       }
     });
-    if (_navController.autoScanTrigger.value > 0) {
+
+    _activeTabWorker = everAll(
+      [_navController.currentIndex, _navController.isHomeActive],
+      (_) {
+        if (!mounted) return;
+        if (!_isActiveTab && _isScanning) {
+          _stopScanner();
+        } else if (_isActiveTab && !_isScanning && !_isHandlingResult) {
+          _startScanner();
+        }
+      },
+    );
+
+    if (_isActiveTab) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && !_isScanning) {
           _startScanner();
@@ -44,6 +67,7 @@ class _BarcodeViewState extends State<BarcodeView> {
   @override
   void dispose() {
     _scanTriggerWorker?.dispose();
+    _activeTabWorker?.dispose();
     _scannerController?.dispose();
     super.dispose();
   }
@@ -51,9 +75,14 @@ class _BarcodeViewState extends State<BarcodeView> {
   void _startScanner() {
     _scannerController?.dispose();
     _scannerController = MobileScannerController(
-      detectionSpeed: DetectionSpeed.unrestricted,
+      detectionSpeed: DetectionSpeed.normal,
       formats: const [
-        BarcodeFormat.all,
+        BarcodeFormat.ean13,
+        BarcodeFormat.ean8,
+        BarcodeFormat.upcA,
+        BarcodeFormat.upcE,
+        BarcodeFormat.code128,
+        BarcodeFormat.code39,
       ],
       returnImage: false,
     );
@@ -127,6 +156,7 @@ class _BarcodeViewState extends State<BarcodeView> {
   }
 
   Future<void> _handleBarcodeScanned(String code) async {
+    if (!_isActiveTab) return;
     setState(() {
       _isHandlingResult = true;
       _lastScannedCode = code;
@@ -134,10 +164,14 @@ class _BarcodeViewState extends State<BarcodeView> {
     _stopScanner();
 
     final result = await _apiService.getProductByBarcode(code);
-    if (!mounted) return;
+    if (!mounted || !_isActiveTab) return;
 
     if (result.success && result.data != null) {
-      _showProductConfirmationDialog(result.data!, code);
+      if (_isCashier) {
+        _showCashierAddToCartDialog(result.data!, code);
+      } else {
+        _showProductConfirmationDialog(result.data!, code);
+      }
     } else {
       _showProductNotFoundSheet(code, result.message);
     }
@@ -145,12 +179,17 @@ class _BarcodeViewState extends State<BarcodeView> {
 
   Future<void> _onDetect(BarcodeCapture capture) async {
     debugPrint('MobileScanner _onDetect: detected ${capture.barcodes.length} barcodes');
-    if (_isHandlingResult) return;
+    if (!_isActiveTab || _isHandlingResult) return;
 
     for (final barcode in capture.barcodes) {
       final code = (barcode.rawValue ?? barcode.displayValue)?.trim();
       debugPrint('MobileScanner detected code: $code, format: ${barcode.format}');
       if (code != null && code.isNotEmpty) {
+        // Filter out false positives / noise dari pantulan cahaya & parsial garis (< 6 karakter)
+        if (code.length < 6) {
+          debugPrint('MobileScanner ignored noise/short code: $code');
+          continue;
+        }
         _handleBarcodeScanned(code);
         break;
       }
@@ -288,13 +327,8 @@ class _BarcodeViewState extends State<BarcodeView> {
   }
 
   void _showProductConfirmationDialog(Map<String, dynamic> product, String code) {
-    final id = (product['id'] as num?)?.toInt() ?? 0;
     final stock = (product['stock'] as num?)?.toInt() ?? 0;
     final price = double.tryParse(product['sell_price']?.toString() ?? '0') ?? 0;
-
-    final homeController = Get.isRegistered<HomeController>()
-        ? Get.find<HomeController>()
-        : Get.put(HomeController());
 
     Get.dialog(
       AlertDialog(
@@ -356,27 +390,167 @@ class _BarcodeViewState extends State<BarcodeView> {
           TextButton(
             onPressed: () {
               Get.back();
-              _startScanner();
             },
-            child: const Text('Batal / Scan Lagi'),
+            child: const Text(
+              'Kembali',
+              style: TextStyle(
+                color: Color(0xFF8C7E74),
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
           ),
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFFE5B582),
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            icon: const Icon(Icons.refresh, size: 18),
+            label: const Text(
+              'Ulang',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            onPressed: () {
+              Get.back();
+              _startScanner();
+            },
+          ),
+        ],
+      ),
+      barrierDismissible: false,
+    );
+  }
+
+  void _showCashierAddToCartDialog(Map<String, dynamic> product, String code) {
+    final id = (product['id'] as num?)?.toInt() ?? 0;
+    final stock = (product['stock'] as num?)?.toInt() ?? 0;
+    final price = double.tryParse(product['sell_price']?.toString() ?? '0') ?? 0;
+
+    final homeController = Get.isRegistered<HomeController>()
+        ? Get.find<HomeController>()
+        : Get.put(HomeController());
+
+    // Pastikan produk masuk di list homeController jika belum ada
+    final existingIndex = homeController.products.indexWhere(
+      (p) => (p['id'] as num?)?.toInt() == id,
+    );
+    if (existingIndex == -1) {
+      homeController.products.add(product);
+    }
+
+    Get.dialog(
+      AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.check_circle_outline, color: Color(0xFF2E5A3E)),
+            SizedBox(width: 8),
+            Text(
+              'Konfirmasi Produk',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              product['name']?.toString() ?? '-',
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF2B2118),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Barcode: $code',
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 12.5),
+            ),
+            Text(
+              'Kategori: ${product['category'] ?? 'Umum'}',
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 12.5),
+            ),
+            Text(
+              'Stok tersedia: $stock',
+              style: TextStyle(
+                color: stock > 0 ? const Color(0xFF2E5A3E) : Colors.red.shade700,
+                fontWeight: FontWeight.w600,
+                fontSize: 12.5,
+              ),
+            ),
+            const Divider(height: 20),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Harga Satuan:', style: TextStyle(fontWeight: FontWeight.w600)),
+                Text(
+                  _formatRupiah(price),
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFFD49A5B),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Get.back();
+              _startScanner();
+            },
+            child: const Text(
+              'Batal',
+              style: TextStyle(
+                color: Color(0xFF8C7E74),
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFE5B582),
+              foregroundColor: Colors.white,
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
             icon: const Icon(Icons.add_shopping_cart, size: 18),
-            label: const Text('Masukkan & Atur Qty'),
+            label: const Text(
+              'Masukkan ke Keranjang',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
             onPressed: stock > 0
                 ? () {
-                    // Tambah +1 ke keranjang jika belum ada
-                    if ((homeController.cart[id] ?? 0) == 0) {
-                      homeController.addToCart(id, stock);
+                    final currentQty = homeController.cart[id] ?? 0;
+                    if (currentQty == 0) {
+                      homeController.addToCart(id, stock, quantity: 1);
                     }
-                    Get.back();
-                    // Langsung beralih ke page Hitung Barang
-                    Get.toNamed(Routes.HITUNG_BARANG);
+                    Get.back(); // Tutup dialog konfirmasi
+                    _navController.isCashierScan.value = false;
+                    if (widget.isCashierMode) {
+                      Get.back(); // Kembali ke halaman Hitung Barang
+                    } else {
+                      Get.toNamed(Routes.HITUNG_BARANG);
+                    }
+                    Get.snackbar(
+                      'Masuk Keranjang',
+                      '${product['name']} berhasil dimasukkan ke keranjang.',
+                      snackPosition: SnackPosition.BOTTOM,
+                      duration: const Duration(seconds: 2),
+                    );
                   }
                 : null,
           ),
@@ -465,103 +639,132 @@ class _BarcodeViewState extends State<BarcodeView> {
   void _showEditProductDialog(Map<String, dynamic> product) {
     final id = (product['id'] as num?)?.toInt() ?? 0;
     final nameCtrl = TextEditingController(text: product['name']?.toString() ?? '');
-    final catCtrl = TextEditingController(text: product['category']?.toString() ?? 'Umum');
     final barcodeCtrl = TextEditingController(text: product['barcode']?.toString() ?? '');
     final buyCtrl = TextEditingController(text: product['buy_price']?.toString() ?? '0');
     final sellCtrl = TextEditingController(text: product['sell_price']?.toString() ?? '0');
     final stockCtrl = TextEditingController(text: product['stock']?.toString() ?? '0');
+    final homeController = Get.isRegistered<HomeController>()
+        ? Get.find<HomeController>()
+        : Get.put(HomeController());
+
+    String currentCat = product['category']?.toString().trim() ?? 'Lainnya';
+    if (currentCat.isEmpty) currentCat = 'Lainnya';
+    if (!homeController.categories.contains(currentCat)) {
+      homeController.categories.add(currentCat);
+    }
+    String selectedCat = currentCat;
 
     Get.dialog(
-      AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Edit Produk'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(labelText: 'Nama Produk'),
+      StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: const Text('Edit Produk'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(labelText: 'Nama Produk'),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text('Kategori:', style: TextStyle(fontSize: 12, color: Color(0xFF8C7E74), fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  DropdownButtonFormField<String>(
+                    value: homeController.categories.contains(selectedCat) ? selectedCat : homeController.categories.first,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    items: homeController.categories.map((c) {
+                      return DropdownMenuItem<String>(
+                        value: c,
+                        child: Text(c, style: const TextStyle(fontSize: 13.5)),
+                      );
+                    }).toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setDialogState(() => selectedCat = val);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: barcodeCtrl,
+                    decoration: const InputDecoration(labelText: 'Barcode'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: buyCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'Harga Beli'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: sellCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'Harga Jual'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: stockCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'Stok'),
+                  ),
+                ],
               ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: catCtrl,
-                decoration: const InputDecoration(labelText: 'Kategori'),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: barcodeCtrl,
-                decoration: const InputDecoration(labelText: 'Barcode'),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: buyCtrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Harga Beli'),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: sellCtrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Harga Jual'),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: stockCtrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Stok'),
+            ),
+            actions: [
+              TextButton(onPressed: () => Get.back(), child: const Text('Batal')),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFD49A5B),
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: () async {
+                  final name = nameCtrl.text.trim();
+                  final sell = num.tryParse(sellCtrl.text.trim()) ?? 0;
+                  if (name.isEmpty || sell <= 0) {
+                    Get.snackbar('Warning', 'Nama dan harga jual wajib diisi.');
+                    return;
+                  }
+                  Get.back();
+                  final result = await _apiService.updateProduct(
+                    id: id,
+                    name: name,
+                    barcode: barcodeCtrl.text.trim().isEmpty ? null : barcodeCtrl.text.trim(),
+                    category: selectedCat,
+                    buyPrice: num.tryParse(buyCtrl.text.trim()) ?? 0,
+                    sellPrice: sell,
+                    stock: int.tryParse(stockCtrl.text.trim()) ?? 0,
+                  );
+                  if (result.success) {
+                    homeController.fetchProducts();
+                    Get.snackbar(
+                      'Berhasil',
+                      result.message,
+                      snackPosition: SnackPosition.BOTTOM,
+                      backgroundColor: Colors.green.withOpacity(0.9),
+                      colorText: Colors.white,
+                    );
+                  } else {
+                    Get.snackbar(
+                      'Gagal',
+                      result.message,
+                      snackPosition: SnackPosition.BOTTOM,
+                      backgroundColor: Colors.redAccent.withOpacity(0.9),
+                      colorText: Colors.white,
+                    );
+                  }
+                },
+                child: const Text('Simpan'),
               ),
             ],
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Get.back(), child: const Text('Batal')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFD49A5B),
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () async {
-              final name = nameCtrl.text.trim();
-              final sell = num.tryParse(sellCtrl.text.trim()) ?? 0;
-              if (name.isEmpty || sell <= 0) {
-                Get.snackbar('Warning', 'Nama dan harga jual wajib diisi.');
-                return;
-              }
-              Get.back();
-              final result = await _apiService.updateProduct(
-                id: id,
-                name: name,
-                barcode: barcodeCtrl.text.trim().isEmpty ? null : barcodeCtrl.text.trim(),
-                category: catCtrl.text.trim().isEmpty ? 'Umum' : catCtrl.text.trim(),
-                buyPrice: num.tryParse(buyCtrl.text.trim()) ?? 0,
-                sellPrice: sell,
-                stock: int.tryParse(stockCtrl.text.trim()) ?? 0,
-              );
-              if (result.success) {
-                if (Get.isRegistered<HomeController>()) {
-                  Get.find<HomeController>().fetchProducts();
-                }
-                Get.snackbar(
-                  'Berhasil',
-                  result.message,
-                  snackPosition: SnackPosition.BOTTOM,
-                  backgroundColor: Colors.green.withOpacity(0.9),
-                  colorText: Colors.white,
-                );
-              } else {
-                Get.snackbar(
-                  'Gagal',
-                  result.message,
-                  snackPosition: SnackPosition.BOTTOM,
-                  backgroundColor: Colors.redAccent.withOpacity(0.9),
-                  colorText: Colors.white,
-                );
-              }
-            },
-            child: const Text('Simpan'),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
@@ -647,7 +850,6 @@ class _BarcodeViewState extends State<BarcodeView> {
 
   void _showAddProductWithBarcodeDialog(String barcode) {
     final nameCtrl = TextEditingController();
-    final catCtrl = TextEditingController(text: 'Umum');
     final buyCtrl = TextEditingController(text: '0');
     final sellCtrl = TextEditingController();
     final stockCtrl = TextEditingController(text: '10');
@@ -655,77 +857,109 @@ class _BarcodeViewState extends State<BarcodeView> {
         ? Get.find<HomeController>()
         : Get.put(HomeController());
 
+    String selectedCat = homeController.categories.isNotEmpty
+        ? homeController.categories.first
+        : 'Sembako & Bahan Pokok';
+
     Get.dialog(
-      AlertDialog(
-        title: const Text('Tambah Produk Baru'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Barcode: $barcode',
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFFD49A5B),
+      StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: const Text('Tambah Produk Baru'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Barcode: $barcode',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFFD49A5B),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(labelText: 'Nama Produk'),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text('Kategori:', style: TextStyle(fontSize: 12, color: Color(0xFF8C7E74), fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  DropdownButtonFormField<String>(
+                    value: homeController.categories.contains(selectedCat) ? selectedCat : homeController.categories.first,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    items: homeController.categories.map((c) {
+                      return DropdownMenuItem<String>(
+                        value: c,
+                        child: Text(c, style: const TextStyle(fontSize: 13.5)),
+                      );
+                    }).toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setDialogState(() => selectedCat = val);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: buyCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'Harga Beli'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: sellCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'Harga Jual'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: stockCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'Stok'),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Get.back(), child: const Text('Batal')),
+              Obx(
+                () => ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFD49A5B),
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: homeController.isSubmitting.value
+                      ? null
+                      : () {
+                          final name = nameCtrl.text.trim();
+                          final sell = num.tryParse(sellCtrl.text.trim()) ?? 0;
+                          if (name.isEmpty || sell <= 0) {
+                            Get.snackbar('Warning', 'Nama dan harga jual wajib diisi.');
+                            return;
+                          }
+                          homeController.addProduct(
+                            name: name,
+                            barcode: barcode,
+                            category: selectedCat,
+                            buyPrice: num.tryParse(buyCtrl.text.trim()) ?? 0,
+                            sellPrice: sell,
+                            stock: int.tryParse(stockCtrl.text.trim()) ?? 0,
+                          );
+                        },
+                  child: const Text('Simpan'),
                 ),
               ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(labelText: 'Nama Produk'),
-              ),
-              TextField(
-                controller: catCtrl,
-                decoration: const InputDecoration(labelText: 'Kategori'),
-              ),
-              TextField(
-                controller: buyCtrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Harga Beli'),
-              ),
-              TextField(
-                controller: sellCtrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Harga Jual'),
-              ),
-              TextField(
-                controller: stockCtrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Stok'),
-              ),
             ],
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Get.back(), child: const Text('Batal')),
-          Obx(
-            () => ElevatedButton(
-              onPressed: homeController.isSubmitting.value
-                  ? null
-                  : () {
-                      final name = nameCtrl.text.trim();
-                      final sell = num.tryParse(sellCtrl.text.trim()) ?? 0;
-                      if (name.isEmpty || sell <= 0) {
-                        Get.snackbar('Warning', 'Nama dan harga jual wajib diisi.');
-                        return;
-                      }
-                      homeController.addProduct(
-                        name: name,
-                        barcode: barcode,
-                        category: catCtrl.text.trim().isEmpty
-                            ? 'Umum'
-                            : catCtrl.text.trim(),
-                        buyPrice: num.tryParse(buyCtrl.text.trim()) ?? 0,
-                        sellPrice: sell,
-                        stock: int.tryParse(stockCtrl.text.trim()) ?? 0,
-                      );
-                    },
-              child: const Text('Simpan'),
-            ),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
@@ -741,12 +975,19 @@ class _BarcodeViewState extends State<BarcodeView> {
           icon: const Icon(Icons.arrow_back, color: Color(0xFF1E1E1E)),
           onPressed: () {
             _stopScanner();
-            navController.showHome();
+            if (widget.isCashierMode) {
+              Get.back();
+            } else if (navController.isCashierScan.value) {
+              navController.isCashierScan.value = false;
+              Get.toNamed(Routes.HITUNG_BARANG);
+            } else {
+              navController.showHome();
+            }
           },
         ),
-        title: const Text(
-          'Scan Barcode',
-          style: TextStyle(
+        title: Text(
+          _isCashier ? 'Scan Kasir' : 'Scan Barcode',
+          style: const TextStyle(
             color: Color(0xFF1E1E1E),
             fontWeight: FontWeight.bold,
             fontSize: 18,
@@ -755,18 +996,43 @@ class _BarcodeViewState extends State<BarcodeView> {
         backgroundColor: Colors.white,
         elevation: 0.5,
         centerTitle: true,
-        actions: _isScanning && _scannerController != null
-            ? [
-                IconButton(
-                  icon: const Icon(Icons.flash_on, color: Color(0xFF1E1E1E)),
-                  onPressed: () => _scannerController?.toggleTorch(),
+        actions: [
+          if (_isScanning && _scannerController != null) ...[
+            IconButton(
+              icon: const Icon(Icons.flash_on, color: Color(0xFF1E1E1E)),
+              onPressed: () => _scannerController?.toggleTorch(),
+            ),
+            IconButton(
+              icon: const Icon(Icons.cameraswitch, color: Color(0xFF1E1E1E)),
+              onPressed: () => _scannerController?.switchCamera(),
+            ),
+          ],
+          if (_isCashier)
+            Obx(() {
+              final homeCtrl = Get.isRegistered<HomeController>()
+                  ? Get.find<HomeController>()
+                  : Get.put(HomeController());
+              return TextButton.icon(
+                onPressed: () {
+                  _stopScanner();
+                  if (widget.isCashierMode) {
+                    Get.back();
+                  } else {
+                    navController.isCashierScan.value = false;
+                    Get.toNamed(Routes.HITUNG_BARANG);
+                  }
+                },
+                icon: const Icon(Icons.shopping_cart, size: 18, color: Color(0xFFD49A5B)),
+                label: Text(
+                  '${homeCtrl.cart.length}',
+                  style: const TextStyle(
+                    color: Color(0xFFD49A5B),
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.cameraswitch, color: Color(0xFF1E1E1E)),
-                  onPressed: () => _scannerController?.switchCamera(),
-                ),
-              ]
-            : null,
+              );
+            }),
+        ],
       ),
       body: Center(
         child: Padding(
@@ -774,6 +1040,31 @@ class _BarcodeViewState extends State<BarcodeView> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              if (_isCashier)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFDF7F2),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFE5B582).withOpacity(0.5)),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.point_of_sale, size: 16, color: Color(0xFFD49A5B)),
+                      SizedBox(width: 8),
+                      Text(
+                        'Mode Kasir: Hasil scan masuk ke keranjang',
+                        style: TextStyle(
+                          color: Color(0xFF8C531B),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               Container(
                 width: 300,
                 height: 300,

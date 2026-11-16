@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import '../../main_navigation/controllers/main_navigation_controller.dart';
+import '../../main_navigation/views/barcode_view.dart';
 import '../controllers/home_controller.dart';
 
 class HitungBarangView extends GetView<HomeController> {
@@ -124,10 +125,7 @@ class HitungBarangView extends GetView<HomeController> {
             tooltip: 'Scan Barcode',
             icon: const Icon(Icons.qr_code_scanner, color: Color(0xFFD49A5B)),
             onPressed: () {
-              Get.back();
-              if (Get.isRegistered<MainNavigationController>()) {
-                Get.find<MainNavigationController>().openBarcodeScanner();
-              }
+              Get.to(() => const BarcodeView(isCashierMode: true));
             },
           ),
         ],
@@ -160,10 +158,7 @@ class HitungBarangView extends GetView<HomeController> {
                 ),
                 ElevatedButton.icon(
                   onPressed: () {
-                    Get.back();
-                    if (Get.isRegistered<MainNavigationController>()) {
-                      Get.find<MainNavigationController>().openBarcodeScanner();
-                    }
+                    Get.to(() => const BarcodeView(isCashierMode: true));
                   },
                   icon: const Icon(Icons.qr_code_scanner, size: 16),
                   label: const Text('Scan Produk'),
@@ -230,10 +225,7 @@ class HitungBarangView extends GetView<HomeController> {
                         const SizedBox(height: 24),
                         ElevatedButton.icon(
                           onPressed: () {
-                            Get.back();
-                            if (Get.isRegistered<MainNavigationController>()) {
-                              Get.find<MainNavigationController>().openBarcodeScanner();
-                            }
+                            Get.to(() => const BarcodeView(isCashierMode: true));
                           },
                           icon: const Icon(Icons.qr_code_scanner),
                           label: const Text('Mulai Scan Barcode'),
